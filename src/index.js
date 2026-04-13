@@ -29,10 +29,13 @@ const AUTHORIZED_ROLE = process.env.AUTHORIZED_ROLE.trim().toLowerCase();
 const MINECRAFT_HOST = process.env.MINECRAFT_HOST;
 const MINECRAFT_PORT = parseIntegerEnv('MINECRAFT_PORT', 25565);
 const MINECRAFT_TIMEOUT_MS = parseIntegerEnv('MINECRAFT_TIMEOUT_MS', 5000);
+const PUBLIC_SERVER_ADDRESS = process.env.PUBLIC_SERVER_ADDRESS || 'submit-beef.gl.joinmc.link';
+const PUBLIC_SERVER_PORT = parseIntegerEnv('PUBLIC_SERVER_PORT', 25565);
 const MINECRAFT_SERVICE_NAME = process.env.MINECRAFT_SERVICE_NAME || 'minecraft';
 const SYSTEMCTL_BIN = process.env.SYSTEMCTL_BIN || 'systemctl';
 const USE_SUDO = normalizeBoolean(process.env.USE_SUDO, false);
 const slashCommands = buildSlashCommands();
+const BOT_STARTED_AT = Date.now();
 const COMMAND_LABELS = {
   start: 'Iniciar',
   stop: 'Detener',
@@ -74,8 +77,20 @@ client.on('interactionCreate', async (interaction) => {
       case 'status':
         await sendMinecraftStatus(interaction);
         break;
+      case 'conectarme':
+        await sendConnectionInfo(interaction);
+        break;
       case 'players':
         await sendMinecraftPlayers(interaction);
+        break;
+      case 'info':
+        await sendServerInfo(interaction);
+        break;
+      case 'ping':
+        await sendBotPing(interaction);
+        break;
+      case 'servicio':
+        await sendServiceStatus(interaction);
         break;
       case 'start':
         await handleServiceCommand(interaction, 'start', 'Servidor iniciado');
@@ -131,8 +146,20 @@ function buildSlashCommands() {
   return [
     new SlashCommandBuilder().setName('status').setDescription('Muestra el estado del servidor'),
     new SlashCommandBuilder()
+      .setName('conectarme')
+      .setDescription('Muestra la direccion publica para entrar al servidor'),
+    new SlashCommandBuilder()
       .setName('players')
       .setDescription('Muestra los jugadores conectados'),
+    new SlashCommandBuilder()
+      .setName('info')
+      .setDescription('Muestra un resumen del servidor y su acceso publico'),
+    new SlashCommandBuilder()
+      .setName('ping')
+      .setDescription('Muestra la latencia del bot y su tiempo activo'),
+    new SlashCommandBuilder()
+      .setName('servicio')
+      .setDescription('Muestra el estado del servicio systemd de Minecraft'),
     new SlashCommandBuilder()
       .setName('start')
       .setDescription('Inicia el servicio de Minecraft'),
@@ -167,13 +194,17 @@ async function sendHelp(interaction) {
             name: 'Consultas',
             value: [
               '`/status` Ver estado del servidor',
+              '`/conectarme` Obtener la direccion publica',
               '`/players` Ver jugadores conectados',
+              '`/info` Resumen general del servidor',
+              '`/ping` Latencia y uptime del bot',
               '`/help` Mostrar esta ayuda',
             ].join('\n'),
           },
           {
             name: 'Administración',
             value: [
+              '`/servicio` Ver estado del servicio',
               '`/start` Iniciar servicio',
               '`/stop` Detener servicio',
               '`/restart` Reiniciar servicio',
@@ -186,6 +217,10 @@ async function sendHelp(interaction) {
           {
             name: 'Servidor objetivo',
             value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``,
+          },
+          {
+            name: 'Acceso publico',
+            value: `\`${formatPublicServerAddress()}\``,
           },
         ],
       }),
@@ -237,6 +272,46 @@ async function sendMinecraftStatus(interaction) {
   }
 }
 
+async function sendConnectionInfo(interaction) {
+  await interaction.deferReply();
+
+  let statusText = 'No disponible';
+  let playersText = 'No disponible';
+  let color = Colors.Blurple;
+
+  try {
+    const response = await getMinecraftStatus();
+    statusText = '🟢 Online';
+    playersText = `${response.players?.online ?? 0}/${response.players?.max ?? 0}`;
+    color = Colors.Green;
+  } catch (error) {
+    statusText = '🔴 Offline o sin respuesta';
+    color = Colors.Orange;
+  }
+
+  await interaction.editReply({
+    embeds: [
+      createEmbed(interaction, {
+        color,
+        title: 'Conectate al servidor',
+        description:
+          'Abre Minecraft Java, entra a **Multijugador** y pega esta direccion para unirte.',
+        fields: [
+          { name: 'Direccion publica', value: `\`${formatPublicServerAddress()}\``, inline: false },
+          { name: 'Estado actual', value: statusText, inline: true },
+          { name: 'Jugadores', value: playersText, inline: true },
+          { name: 'Tipo', value: 'Minecraft Java Edition', inline: true },
+          {
+            name: 'Paso rapido',
+            value: 'Multijugador -> Agregar servidor -> Pegar direccion -> Unirse',
+            inline: false,
+          },
+        ],
+      }),
+    ],
+  });
+}
+
 async function sendMinecraftPlayers(interaction) {
   await interaction.deferReply();
 
@@ -279,7 +354,7 @@ async function sendMinecraftPlayers(interaction) {
       return;
     }
 
-    const names = samplePlayers.map((player) => `• \`${player.name}\``).join('\n');
+    const names = formatPlayerList(samplePlayers);
     await interaction.editReply({
       embeds: [
         createEmbed(interaction, {
@@ -308,22 +383,129 @@ async function sendMinecraftPlayers(interaction) {
   }
 }
 
-async function handleServiceCommand(interaction, action, successText) {
+async function sendServerInfo(interaction) {
+  await interaction.deferReply();
+
+  let statusLabel = '🔴 Offline';
+  let version = 'No disponible';
+  let players = 'No disponible';
+  let motd = 'No disponible';
+  let color = Colors.Blurple;
+
+  try {
+    const response = await getMinecraftStatus();
+    statusLabel = '🟢 Online';
+    version = response.version?.name || 'Desconocida';
+    players = `${response.players?.online ?? 0}/${response.players?.max ?? 0}`;
+    motd = formatMotd(response) || 'Sin MOTD visible';
+    color = Colors.Green;
+  } catch (error) {
+    color = Colors.Orange;
+  }
+
+  await interaction.editReply({
+    embeds: [
+      createEmbed(interaction, {
+        color,
+        title: 'Informacion del servidor',
+        description: 'Resumen rapido del bot, el acceso publico y la instancia de Minecraft.',
+        fields: [
+          { name: 'Acceso publico', value: `\`${formatPublicServerAddress()}\``, inline: false },
+          { name: 'Endpoint local', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``, inline: false },
+          { name: 'Estado', value: statusLabel, inline: true },
+          { name: 'Jugadores', value: players, inline: true },
+          { name: 'Version', value: version, inline: true },
+          { name: 'Servicio', value: `\`${MINECRAFT_SERVICE_NAME}\``, inline: true },
+          { name: 'Rol admin', value: `\`${process.env.AUTHORIZED_ROLE}\``, inline: true },
+          { name: 'MOTD', value: motd, inline: false },
+        ],
+      }),
+    ],
+  });
+}
+
+async function sendBotPing(interaction) {
+  const responseLatency = Date.now() - interaction.createdTimestamp;
+  const apiLatency = Math.max(client.ws.ping, 0);
+  const uptime = formatDuration(Date.now() - BOT_STARTED_AT);
+
+  await interaction.reply({
+    embeds: [
+      createEmbed(interaction, {
+        color: Colors.Blurple,
+        title: 'Estado del bot',
+        description: 'Metricas rapidas para validar que el bot responde correctamente.',
+        fields: [
+          { name: 'Latencia del comando', value: `${responseLatency} ms`, inline: true },
+          { name: 'Latencia API Discord', value: `${apiLatency} ms`, inline: true },
+          { name: 'Uptime del bot', value: uptime, inline: true },
+        ],
+      }),
+    ],
+    ephemeral: true,
+  });
+}
+
+async function sendServiceStatus(interaction) {
   if (!(await hasAuthorizedRole(interaction))) {
-    await interaction.reply({
+    await replyUnauthorized(interaction, 'servicio');
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const serviceDetails = await getServiceDetails();
+    await interaction.editReply({
       embeds: [
         createEmbed(interaction, {
-          color: Colors.Red,
-          title: 'Acceso denegado',
-          description: 'No tienes permiso para ejecutar acciones administrativas sobre el servidor.',
+          color: getServiceStatusColor(serviceDetails.ActiveState),
+          title: 'Estado del servicio Minecraft',
+          description: `Diagnostico de \`${MINECRAFT_SERVICE_NAME}\` via systemd.`,
           fields: [
-            { name: 'Comando', value: `/${action}`, inline: true },
-            { name: 'Rol requerido', value: `\`${process.env.AUTHORIZED_ROLE}\``, inline: true },
+            {
+              name: 'Estado',
+              value: formatServiceState(serviceDetails.ActiveState, serviceDetails.SubState),
+              inline: true,
+            },
+            {
+              name: 'Habilitado',
+              value: serviceDetails.UnitFileState || 'No disponible',
+              inline: true,
+            },
+            {
+              name: 'PID',
+              value: serviceDetails.MainPID && serviceDetails.MainPID !== '0'
+                ? serviceDetails.MainPID
+                : 'No ejecutandose',
+              inline: true,
+            },
+            {
+              name: 'Inicio principal',
+              value: serviceDetails.ExecMainStartTimestamp || 'No disponible',
+              inline: false,
+            },
           ],
         }),
       ],
-      ephemeral: true,
     });
+  } catch (error) {
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'No se pudo consultar el servicio',
+          description: `Falló la consulta del servicio \`${MINECRAFT_SERVICE_NAME}\`.`,
+          fields: [{ name: 'Motivo', value: formatError(error), inline: false }],
+        }),
+      ],
+    });
+  }
+}
+
+async function handleServiceCommand(interaction, action, successText) {
+  if (!(await hasAuthorizedRole(interaction))) {
+    await replyUnauthorized(interaction, action);
     return;
   }
 
@@ -410,17 +592,61 @@ function looksLikeLegacySignatureIssue(error) {
   return /port|number|options/i.test(error.message);
 }
 
+async function getServiceDetails() {
+  if (process.platform !== 'linux') {
+    throw new Error('La consulta del servicio solo esta soportada en Linux.');
+  }
+
+  const { stdout } = await runSystemctl(
+    [
+      'show',
+      MINECRAFT_SERVICE_NAME,
+      '--no-page',
+      '--property=ActiveState',
+      '--property=SubState',
+      '--property=UnitFileState',
+      '--property=MainPID',
+      '--property=ExecMainStartTimestamp',
+    ],
+    15000,
+  );
+
+  return parseSystemctlProperties(stdout);
+}
+
 function createEmbed(interaction, { color, title, description, fields = [] }) {
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(title)
     .setDescription(description)
-    .addFields(fields)
     .setFooter({
       text: `Solicitado por ${interaction.user.tag}`,
       iconURL: interaction.user.displayAvatarURL(),
     })
     .setTimestamp();
+
+  if (fields.length > 0) {
+    embed.addFields(fields);
+  }
+
+  return embed;
+}
+
+async function replyUnauthorized(interaction, commandName) {
+  await interaction.reply({
+    embeds: [
+      createEmbed(interaction, {
+        color: Colors.Red,
+        title: 'Acceso denegado',
+        description: 'No tienes permiso para ejecutar acciones administrativas sobre el servidor.',
+        fields: [
+          { name: 'Comando', value: `/${commandName}`, inline: true },
+          { name: 'Rol requerido', value: `\`${process.env.AUTHORIZED_ROLE}\``, inline: true },
+        ],
+      }),
+    ],
+    ephemeral: true,
+  });
 }
 
 function formatMotd(response) {
@@ -438,6 +664,86 @@ function formatMotd(response) {
   return null;
 }
 
+function formatPublicServerAddress() {
+  return PUBLIC_SERVER_PORT === 25565
+    ? PUBLIC_SERVER_ADDRESS
+    : `${PUBLIC_SERVER_ADDRESS}:${PUBLIC_SERVER_PORT}`;
+}
+
+function formatPlayerList(players) {
+  const visiblePlayers = players.slice(0, 20);
+  const remainingPlayers = players.length - visiblePlayers.length;
+  const lines = visiblePlayers.map((player) => `• \`${player.name}\``);
+
+  if (remainingPlayers > 0) {
+    lines.push(`• y ${remainingPlayers} mas...`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = [];
+
+  if (days > 0) {
+    parts.push(`${days}d`);
+  }
+
+  if (hours > 0 || days > 0) {
+    parts.push(`${hours}h`);
+  }
+
+  if (minutes > 0 || hours > 0 || days > 0) {
+    parts.push(`${minutes}m`);
+  }
+
+  parts.push(`${seconds}s`);
+  return parts.join(' ');
+}
+
+function parseSystemctlProperties(stdout) {
+  return stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .reduce((result, line) => {
+      const separatorIndex = line.indexOf('=');
+      if (separatorIndex === -1) {
+        return result;
+      }
+
+      const key = line.slice(0, separatorIndex);
+      const value = line.slice(separatorIndex + 1).trim();
+      result[key] = value;
+      return result;
+    }, {});
+}
+
+function getServiceStatusColor(activeState) {
+  switch ((activeState || '').toLowerCase()) {
+    case 'active':
+      return Colors.Green;
+    case 'activating':
+      return Colors.Blue;
+    case 'inactive':
+      return Colors.Orange;
+    case 'failed':
+      return Colors.Red;
+    default:
+      return Colors.Grey;
+  }
+}
+
+function formatServiceState(activeState, subState) {
+  const normalizedActiveState = activeState || 'unknown';
+  const normalizedSubState = subState || 'unknown';
+  return `${normalizedActiveState} (${normalizedSubState})`;
+}
+
 function formatError(error) {
   if (!(error instanceof Error)) {
     return 'Sin detalles adicionales';
@@ -451,12 +757,13 @@ async function runServiceAction(action) {
     throw new Error('El control del servicio Minecraft solo está soportado en Linux.');
   }
 
-  const command = USE_SUDO ? 'sudo' : SYSTEMCTL_BIN;
-  const args = USE_SUDO
-    ? ['-n', SYSTEMCTL_BIN, action, MINECRAFT_SERVICE_NAME]
-    : [action, MINECRAFT_SERVICE_NAME];
+  await runSystemctl([action, MINECRAFT_SERVICE_NAME], 15000);
+}
 
-  await execFileAsync(command, args, { timeout: 15000 });
+async function runSystemctl(systemctlArgs, timeoutMs) {
+  const command = USE_SUDO ? 'sudo' : SYSTEMCTL_BIN;
+  const args = USE_SUDO ? ['-n', SYSTEMCTL_BIN, ...systemctlArgs] : systemctlArgs;
+  return execFileAsync(command, args, { timeout: timeoutMs });
 }
 
 function parseIntegerEnv(name, defaultValue) {
