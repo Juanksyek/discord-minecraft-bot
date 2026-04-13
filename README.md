@@ -5,7 +5,10 @@ Repositorio base para administrar un servidor Paper desde Discord en una Raspber
 ## Funcionalidades
 
 - Consultar si el servidor está online.
+- Compartir la dirección pública para entrar al servidor.
 - Ver jugadores conectados.
+- Mostrar resumen del servidor y del bot.
+- Consultar el estado del servicio `systemd`.
 - Reiniciar, iniciar y detener el servicio `minecraft`.
 - Restringir acciones administrativas por rol de Discord.
 - Preparar despliegue con `systemd`, `Playit` y backups automáticos.
@@ -47,6 +50,8 @@ AUTHORIZED_ROLE=Admin
 MINECRAFT_HOST=127.0.0.1
 MINECRAFT_PORT=25565
 MINECRAFT_TIMEOUT_MS=5000
+PUBLIC_SERVER_ADDRESS=submit-beef.gl.joinmc.link
+PUBLIC_SERVER_PORT=25565
 MINECRAFT_SERVICE_NAME=minecraft
 USE_SUDO=true
 SYSTEMCTL_BIN=systemctl
@@ -57,6 +62,8 @@ SYSTEMCTL_BIN=systemctl
 - `DISCORD_GUILD_ID` es opcional, pero recomendado en desarrollo para registrar comandos slash al instante en un solo servidor.
 - `AUTHORIZED_ROLE` debe coincidir con el nombre del rol de Discord.
 - `MINECRAFT_HOST` normalmente será `127.0.0.1` si el bot corre en la misma Raspberry Pi.
+- `PUBLIC_SERVER_ADDRESS` es la dirección pública que compartirás con `/conectarme`.
+- `PUBLIC_SERVER_PORT` puede omitirse visualmente si usas `25565`, pero queda configurable por si el túnel usa otro puerto.
 - `USE_SUDO=true` asume que el usuario del bot tendrá permisos `sudo` sin contraseña para `systemctl`.
 - Si tu servicio de Minecraft no se llama `minecraft`, cambia `MINECRAFT_SERVICE_NAME`.
 - Si omites `DISCORD_GUILD_ID`, el bot registrará comandos globales y Discord puede tardar un rato en mostrarlos.
@@ -85,7 +92,11 @@ npm run check
 | Comando | Descripción | Requiere rol |
 | --- | --- | --- |
 | `/status` | Muestra si el servidor responde y cuántos jugadores hay | No |
+| `/conectarme` | Comparte la dirección pública para unirse al servidor | No |
 | `/players` | Intenta listar jugadores conectados | No |
+| `/info` | Muestra resumen del servidor, acceso público y configuración principal | No |
+| `/ping` | Muestra latencia del bot y uptime | No |
+| `/servicio` | Muestra el estado del servicio `systemd` de Minecraft | Sí |
 | `/start` | Inicia el servicio de Minecraft | Sí |
 | `/stop` | Detiene el servicio de Minecraft | Sí |
 | `/restart` | Reinicia el servicio de Minecraft | Sí |
@@ -176,9 +187,10 @@ El dominio resultante será algo como `xxxxx.playit.gg`.
 
 1. Arranca Paper como servicio `minecraft`.
 2. Verifica `/status` y `/players` desde Discord.
-3. Prueba `/restart` con una cuenta que tenga el rol autorizado.
-4. Reinicia la Raspberry Pi y valida que `discord-bot` y `minecraft` vuelvan a levantar.
-5. Comprueba acceso externo mediante el dominio de Playit.
+3. Verifica `/conectarme` para compartir la dirección pública correcta.
+4. Prueba `/restart` y `/servicio` con una cuenta que tenga el rol autorizado.
+5. Reinicia la Raspberry Pi y valida que `discord-bot` y `minecraft` vuelvan a levantar.
+6. Comprueba acceso externo mediante el dominio de Playit.
 
 ## Mejoras futuras
 
