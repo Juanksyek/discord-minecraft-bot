@@ -1,0 +1,2 @@
+# Ajusta el usuario y la ruta de systemctl en tu Raspberry Pi.
+discordbot ALL=NOPASSWD: /bin/systemctl start minecraft, /bin/systemctl stop minecraft, /bin/systemctl restart minecraft
