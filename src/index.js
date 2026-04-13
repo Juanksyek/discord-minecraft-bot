@@ -32,6 +32,10 @@ const MINECRAFT_TIMEOUT_MS = parseIntegerEnv('MINECRAFT_TIMEOUT_MS', 5000);
 const PUBLIC_SERVER_ADDRESS = process.env.PUBLIC_SERVER_ADDRESS || 'submit-beef.gl.joinmc.link';
 const PUBLIC_SERVER_PORT = parseIntegerEnv('PUBLIC_SERVER_PORT', 25565);
 const MINECRAFT_SERVICE_NAME = process.env.MINECRAFT_SERVICE_NAME || 'minecraft';
+const BOT_SERVICE_NAME = process.env.BOT_SERVICE_NAME || 'discord-bot';
+const BOT_REPO_DIR = process.env.BOT_REPO_DIR || process.cwd();
+const GIT_REMOTE_NAME = process.env.GIT_REMOTE_NAME || 'origin';
+const GIT_BRANCH_NAME = process.env.GIT_BRANCH_NAME || 'main';
 const SYSTEMCTL_BIN = process.env.SYSTEMCTL_BIN || 'systemctl';
 const USE_SUDO = normalizeBoolean(process.env.USE_SUDO, false);
 const slashCommands = buildSlashCommands();
@@ -91,6 +95,9 @@ client.on('interactionCreate', async (interaction) => {
         break;
       case 'servicio':
         await sendServiceStatus(interaction);
+        break;
+      case 'actualizar':
+        await handleBotUpdate(interaction);
         break;
       case 'start':
         await handleServiceCommand(interaction, 'start', 'Servidor iniciado');
@@ -161,6 +168,9 @@ function buildSlashCommands() {
       .setName('servicio')
       .setDescription('Muestra el estado del servicio systemd de Minecraft'),
     new SlashCommandBuilder()
+      .setName('actualizar')
+      .setDescription('Descarga cambios de main y reinicia el bot'),
+    new SlashCommandBuilder()
       .setName('start')
       .setDescription('Inicia el servicio de Minecraft'),
     new SlashCommandBuilder()
@@ -205,6 +215,7 @@ async function sendHelp(interaction) {
             name: 'Administración',
             value: [
               '`/servicio` Ver estado del servicio',
+              '`/actualizar` Bajar cambios y reiniciar bot',
               '`/start` Iniciar servicio',
               '`/stop` Detener servicio',
               '`/restart` Reiniciar servicio',
@@ -503,6 +514,69 @@ async function sendServiceStatus(interaction) {
   }
 }
 
+async function handleBotUpdate(interaction) {
+  if (!(await hasAuthorizedRole(interaction))) {
+    await replyUnauthorized(interaction, 'actualizar');
+    return;
+  }
+
+  if (process.platform !== 'linux') {
+    await interaction.reply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'Actualizacion no soportada',
+          description: 'Este comando esta pensado para la Raspberry Pi con systemd.',
+          fields: [{ name: 'Sistema actual', value: process.platform, inline: true }],
+        }),
+      ],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const pullResult = await runGitPull();
+    const summary = summarizeGitPullOutput(pullResult.stdout, pullResult.stderr);
+
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Green,
+          title: 'Actualizacion descargada',
+          description: `Se ejecutó \`git pull ${GIT_REMOTE_NAME} ${GIT_BRANCH_NAME}\` y el bot se reiniciará en unos segundos.`,
+          fields: [
+            { name: 'Repositorio', value: `\`${BOT_REPO_DIR}\``, inline: false },
+            { name: 'Servicio a reiniciar', value: `\`${BOT_SERVICE_NAME}\``, inline: true },
+            { name: 'Fuente', value: `\`${GIT_REMOTE_NAME}/${GIT_BRANCH_NAME}\``, inline: true },
+            { name: 'Resultado', value: summary, inline: false },
+          ],
+        }),
+      ],
+    });
+
+    scheduleBotRestart(interaction);
+  } catch (error) {
+    console.error('No fue posible actualizar el bot:', error);
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'Actualizacion fallida',
+          description: 'No se pudieron bajar los cambios del repositorio.',
+          fields: [
+            { name: 'Repositorio', value: `\`${BOT_REPO_DIR}\``, inline: false },
+            { name: 'Fuente', value: `\`${GIT_REMOTE_NAME}/${GIT_BRANCH_NAME}\``, inline: true },
+            { name: 'Motivo', value: formatError(error), inline: false },
+          ],
+        }),
+      ],
+    });
+  }
+}
+
 async function handleServiceCommand(interaction, action, successText) {
   if (!(await hasAuthorizedRole(interaction))) {
     await replyUnauthorized(interaction, action);
@@ -609,6 +683,7 @@ async function getServiceDetails() {
       '--property=ExecMainStartTimestamp',
     ],
     15000,
+    { useSudo: false },
   );
 
   return parseSystemctlProperties(stdout);
@@ -752,6 +827,14 @@ function formatError(error) {
   return error.message || 'Sin detalles adicionales';
 }
 
+async function runGitPull() {
+  return execFileAsync(
+    'git',
+    ['-C', BOT_REPO_DIR, 'pull', GIT_REMOTE_NAME, GIT_BRANCH_NAME],
+    { timeout: 30000 },
+  );
+}
+
 async function runServiceAction(action) {
   if (process.platform !== 'linux') {
     throw new Error('El control del servicio Minecraft solo está soportado en Linux.');
@@ -760,9 +843,49 @@ async function runServiceAction(action) {
   await runSystemctl([action, MINECRAFT_SERVICE_NAME], 15000);
 }
 
-async function runSystemctl(systemctlArgs, timeoutMs) {
-  const command = USE_SUDO ? 'sudo' : SYSTEMCTL_BIN;
-  const args = USE_SUDO ? ['-n', SYSTEMCTL_BIN, ...systemctlArgs] : systemctlArgs;
+function scheduleBotRestart(interaction) {
+  setTimeout(async () => {
+    try {
+      await runSystemctl(['restart', BOT_SERVICE_NAME], 15000);
+    } catch (error) {
+      console.error(`No fue posible reiniciar el servicio ${BOT_SERVICE_NAME}:`, error);
+
+      try {
+        await interaction.followUp({
+          embeds: [
+            createEmbed(interaction, {
+              color: Colors.Red,
+              title: 'Reinicio del bot fallido',
+              description: `Se bajaron los cambios, pero no se pudo reiniciar \`${BOT_SERVICE_NAME}\`.`,
+              fields: [{ name: 'Motivo', value: formatError(error), inline: false }],
+            }),
+          ],
+          ephemeral: true,
+        });
+      } catch (followUpError) {
+        console.error('No fue posible informar el fallo del reinicio del bot:', followUpError);
+      }
+    }
+  }, 1500);
+}
+
+function summarizeGitPullOutput(stdout, stderr) {
+  const combinedOutput = `${stdout || ''}\n${stderr || ''}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (combinedOutput.length === 0) {
+    return 'Sin salida';
+  }
+
+  return combinedOutput.slice(-3).join('\n').slice(0, 1024);
+}
+
+async function runSystemctl(systemctlArgs, timeoutMs, options = {}) {
+  const useSudo = options.useSudo ?? USE_SUDO;
+  const command = useSudo ? 'sudo' : SYSTEMCTL_BIN;
+  const args = useSudo ? ['-n', SYSTEMCTL_BIN, ...systemctlArgs] : systemctlArgs;
   return execFileAsync(command, args, { timeout: timeoutMs });
 }
 
