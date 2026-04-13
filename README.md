@@ -9,6 +9,7 @@ Repositorio base para administrar un servidor Paper desde Discord en una Raspber
 - Ver jugadores conectados.
 - Mostrar resumen del servidor y del bot.
 - Consultar el estado del servicio `systemd`.
+- Bajar cambios del bot desde `main` y reiniciarlo desde Discord.
 - Reiniciar, iniciar y detener el servicio `minecraft`.
 - Restringir acciones administrativas por rol de Discord.
 - Preparar despliegue con `systemd`, `Playit` y backups automáticos.
@@ -53,6 +54,10 @@ MINECRAFT_TIMEOUT_MS=5000
 PUBLIC_SERVER_ADDRESS=submit-beef.gl.joinmc.link
 PUBLIC_SERVER_PORT=25565
 MINECRAFT_SERVICE_NAME=minecraft
+BOT_SERVICE_NAME=discord-bot
+BOT_REPO_DIR=/home/pi/discord-minecraft-bot
+GIT_REMOTE_NAME=origin
+GIT_BRANCH_NAME=main
 USE_SUDO=true
 SYSTEMCTL_BIN=systemctl
 ```
@@ -64,6 +69,9 @@ SYSTEMCTL_BIN=systemctl
 - `MINECRAFT_HOST` normalmente será `127.0.0.1` si el bot corre en la misma Raspberry Pi.
 - `PUBLIC_SERVER_ADDRESS` es la dirección pública que compartirás con `/conectarme`.
 - `PUBLIC_SERVER_PORT` puede omitirse visualmente si usas `25565`, pero queda configurable por si el túnel usa otro puerto.
+- `BOT_SERVICE_NAME` es el nombre del servicio `systemd` del bot, usado por `/actualizar`.
+- `BOT_REPO_DIR` debe apuntar a la carpeta del repo en la Raspberry Pi.
+- `GIT_REMOTE_NAME` y `GIT_BRANCH_NAME` controlan desde dónde baja cambios `/actualizar`.
 - `USE_SUDO=true` asume que el usuario del bot tendrá permisos `sudo` sin contraseña para `systemctl`.
 - Si tu servicio de Minecraft no se llama `minecraft`, cambia `MINECRAFT_SERVICE_NAME`.
 - Si omites `DISCORD_GUILD_ID`, el bot registrará comandos globales y Discord puede tardar un rato en mostrarlos.
@@ -97,6 +105,7 @@ npm run check
 | `/info` | Muestra resumen del servidor, acceso público y configuración principal | No |
 | `/ping` | Muestra latencia del bot y uptime | No |
 | `/servicio` | Muestra el estado del servicio `systemd` de Minecraft | Sí |
+| `/actualizar` | Ejecuta `git pull` sobre `main` y reinicia el servicio del bot | Sí |
 | `/start` | Inicia el servicio de Minecraft | Sí |
 | `/stop` | Detiene el servicio de Minecraft | Sí |
 | `/restart` | Reinicia el servicio de Minecraft | Sí |
@@ -127,6 +136,7 @@ sudo visudo -cf /etc/sudoers.d/discord-bot-minecraft
 ```
 
 Debes reemplazar `discordbot` por el usuario real y validar que la ruta de `systemctl` sea correcta en tu Raspberry Pi.
+Si vas a usar `/actualizar`, también debes permitir reiniciar el servicio del bot (`discord-bot` o el nombre que uses en `BOT_SERVICE_NAME`).
 
 ### 2.1. Registrar y usar slash commands
 
@@ -188,7 +198,7 @@ El dominio resultante será algo como `xxxxx.playit.gg`.
 1. Arranca Paper como servicio `minecraft`.
 2. Verifica `/status` y `/players` desde Discord.
 3. Verifica `/conectarme` para compartir la dirección pública correcta.
-4. Prueba `/restart` y `/servicio` con una cuenta que tenga el rol autorizado.
+4. Prueba `/restart`, `/servicio` y `/actualizar` con una cuenta que tenga el rol autorizado.
 5. Reinicia la Raspberry Pi y valida que `discord-bot` y `minecraft` vuelvan a levantar.
 6. Comprueba acceso externo mediante el dominio de Playit.
 
