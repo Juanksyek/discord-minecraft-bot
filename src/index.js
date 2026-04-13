@@ -4,6 +4,8 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const {
   Client,
+  Colors,
+  EmbedBuilder,
   GatewayIntentBits,
   REST,
   Routes,
@@ -31,6 +33,11 @@ const MINECRAFT_SERVICE_NAME = process.env.MINECRAFT_SERVICE_NAME || 'minecraft'
 const SYSTEMCTL_BIN = process.env.SYSTEMCTL_BIN || 'systemctl';
 const USE_SUDO = normalizeBoolean(process.env.USE_SUDO, false);
 const slashCommands = buildSlashCommands();
+const COMMAND_LABELS = {
+  start: 'Iniciar',
+  stop: 'Detener',
+  restart: 'Reiniciar',
+};
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
@@ -84,14 +91,24 @@ client.on('interactionCreate', async (interaction) => {
     }
   } catch (error) {
     console.error(`Error procesando el comando "${interaction.commandName}":`, error);
+    const errorReply = {
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'Error al procesar el comando',
+          description: 'Ocurrió un problema inesperado mientras el bot atendía tu solicitud.',
+          fields: [{ name: 'Comando', value: `/${interaction.commandName}`, inline: true }],
+        }),
+      ],
+    };
 
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply('Ocurrió un error al procesar el comando.');
+      await interaction.editReply(errorReply);
       return;
     }
 
     await interaction.reply({
-      content: 'Ocurrió un error al procesar el comando.',
+      ...errorReply,
       ephemeral: true,
     });
   }
@@ -139,18 +156,40 @@ async function registerSlashCommands() {
 }
 
 async function sendHelp(interaction) {
-  const lines = [
-    'Comandos disponibles:',
-    '/status  - Estado del servidor Minecraft',
-    '/players - Jugadores conectados',
-    '/start   - Iniciar servicio Minecraft (admin)',
-    '/stop    - Detener servicio Minecraft (admin)',
-    '/restart - Reiniciar servicio Minecraft (admin)',
-    '/help    - Mostrar esta ayuda',
-  ];
-
   await interaction.reply({
-    content: lines.join('\n'),
+    embeds: [
+      createEmbed(interaction, {
+        color: Colors.Blurple,
+        title: 'Panel del bot de Minecraft',
+        description: 'Comandos disponibles para consultar y administrar el servidor desde Discord.',
+        fields: [
+          {
+            name: 'Consultas',
+            value: [
+              '`/status` Ver estado del servidor',
+              '`/players` Ver jugadores conectados',
+              '`/help` Mostrar esta ayuda',
+            ].join('\n'),
+          },
+          {
+            name: 'Administración',
+            value: [
+              '`/start` Iniciar servicio',
+              '`/stop` Detener servicio',
+              '`/restart` Reiniciar servicio',
+            ].join('\n'),
+          },
+          {
+            name: 'Permiso requerido',
+            value: `Rol autorizado: \`${process.env.AUTHORIZED_ROLE}\``,
+          },
+          {
+            name: 'Servidor objetivo',
+            value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``,
+          },
+        ],
+      }),
+    ],
     ephemeral: true,
   });
 }
@@ -163,13 +202,38 @@ async function sendMinecraftStatus(interaction) {
     const version = response.version?.name || 'desconocida';
     const onlinePlayers = response.players?.online ?? 0;
     const maxPlayers = response.players?.max ?? 0;
+    const motd = formatMotd(response);
 
-    await interaction.editReply(
-      `🟢 Servidor online\nVersión: ${version}\nJugadores: ${onlinePlayers}/${maxPlayers}`,
-    );
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Green,
+          title: 'Servidor online',
+          description: motd || 'El servidor responde correctamente.',
+          fields: [
+            { name: 'Estado', value: '🟢 En línea', inline: true },
+            { name: 'Jugadores', value: `${onlinePlayers}/${maxPlayers}`, inline: true },
+            { name: 'Versión', value: version, inline: true },
+            { name: 'Endpoint', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``, inline: false },
+          ],
+        }),
+      ],
+    });
   } catch (error) {
     console.error('No fue posible consultar el estado del servidor:', error.message);
-    await interaction.editReply('🔴 Servidor offline o no responde');
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'Servidor offline',
+          description: 'No se pudo establecer conexión con el servidor Minecraft.',
+          fields: [
+            { name: 'Estado', value: '🔴 Sin respuesta', inline: true },
+            { name: 'Endpoint', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``, inline: true },
+          ],
+        }),
+      ],
+    });
   }
 }
 
@@ -182,29 +246,82 @@ async function sendMinecraftPlayers(interaction) {
     const samplePlayers = response.players?.sample ?? [];
 
     if (onlinePlayers === 0) {
-      await interaction.editReply('No hay jugadores conectados en este momento.');
+      await interaction.editReply({
+        embeds: [
+          createEmbed(interaction, {
+            color: Colors.Yellow,
+            title: 'Sin jugadores conectados',
+            description: 'El servidor está online, pero no hay jugadores dentro en este momento.',
+            fields: [
+              { name: 'Jugadores', value: '0', inline: true },
+              { name: 'Endpoint', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``, inline: true },
+            ],
+          }),
+        ],
+      });
       return;
     }
 
     if (!Array.isArray(samplePlayers) || samplePlayers.length === 0) {
-      await interaction.editReply(
-        `Hay ${onlinePlayers} jugador(es) conectados, pero el servidor no expone la lista por ping.`,
-      );
+      await interaction.editReply({
+        embeds: [
+          createEmbed(interaction, {
+            color: Colors.Orange,
+            title: 'Jugadores conectados',
+            description: 'Hay actividad en el servidor, pero Paper no expone la lista completa por ping.',
+            fields: [
+              { name: 'Jugadores detectados', value: `${onlinePlayers}`, inline: true },
+              { name: 'Endpoint', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``, inline: true },
+            ],
+          }),
+        ],
+      });
       return;
     }
 
-    const names = samplePlayers.map((player) => player.name).join(', ');
-    await interaction.editReply(`Jugadores conectados (${onlinePlayers}): ${names}`);
+    const names = samplePlayers.map((player) => `• \`${player.name}\``).join('\n');
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Aqua,
+          title: 'Jugadores conectados',
+          description: names,
+          fields: [
+            { name: 'Total', value: `${onlinePlayers}`, inline: true },
+            { name: 'Endpoint', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\``, inline: true },
+          ],
+        }),
+      ],
+    });
   } catch (error) {
     console.error('No fue posible consultar los jugadores conectados:', error.message);
-    await interaction.editReply('🔴 No se pudo obtener la lista de jugadores');
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'No se pudo obtener la lista',
+          description: 'Falló la consulta de jugadores del servidor Minecraft.',
+          fields: [{ name: 'Endpoint', value: `\`${MINECRAFT_HOST}:${MINECRAFT_PORT}\`` }],
+        }),
+      ],
+    });
   }
 }
 
 async function handleServiceCommand(interaction, action, successText) {
   if (!(await hasAuthorizedRole(interaction))) {
     await interaction.reply({
-      content: '⛔ No autorizado',
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'Acceso denegado',
+          description: 'No tienes permiso para ejecutar acciones administrativas sobre el servidor.',
+          fields: [
+            { name: 'Comando', value: `/${action}`, inline: true },
+            { name: 'Rol requerido', value: `\`${process.env.AUTHORIZED_ROLE}\``, inline: true },
+          ],
+        }),
+      ],
       ephemeral: true,
     });
     return;
@@ -214,12 +331,36 @@ async function handleServiceCommand(interaction, action, successText) {
 
   try {
     await runServiceAction(action);
-    await interaction.editReply(`✅ ${successText}`);
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Green,
+          title: 'Acción completada',
+          description: successText,
+          fields: [
+            { name: 'Acción', value: COMMAND_LABELS[action] || action, inline: true },
+            { name: 'Servicio', value: `\`${MINECRAFT_SERVICE_NAME}\``, inline: true },
+            { name: 'Ejecutado por', value: interaction.user.tag, inline: true },
+          ],
+        }),
+      ],
+    });
   } catch (error) {
     console.error(`No fue posible ejecutar "${action}" sobre ${MINECRAFT_SERVICE_NAME}:`, error);
-    await interaction.editReply(
-      `❌ No se pudo ejecutar "${action}" sobre el servicio Minecraft`,
-    );
+    await interaction.editReply({
+      embeds: [
+        createEmbed(interaction, {
+          color: Colors.Red,
+          title: 'Acción fallida',
+          description: `No se pudo ejecutar "${action}" sobre el servicio Minecraft.`,
+          fields: [
+            { name: 'Acción', value: COMMAND_LABELS[action] || action, inline: true },
+            { name: 'Servicio', value: `\`${MINECRAFT_SERVICE_NAME}\``, inline: true },
+            { name: 'Motivo', value: formatError(error), inline: false },
+          ],
+        }),
+      ],
+    });
   }
 }
 
@@ -267,6 +408,42 @@ function looksLikeLegacySignatureIssue(error) {
   }
 
   return /port|number|options/i.test(error.message);
+}
+
+function createEmbed(interaction, { color, title, description, fields = [] }) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .setDescription(description)
+    .addFields(fields)
+    .setFooter({
+      text: `Solicitado por ${interaction.user.tag}`,
+      iconURL: interaction.user.displayAvatarURL(),
+    })
+    .setTimestamp();
+}
+
+function formatMotd(response) {
+  const cleanMotd = response.motd?.clean;
+
+  if (Array.isArray(cleanMotd)) {
+    const value = cleanMotd.join(' ').trim();
+    return value || null;
+  }
+
+  if (typeof cleanMotd === 'string') {
+    return cleanMotd.trim() || null;
+  }
+
+  return null;
+}
+
+function formatError(error) {
+  if (!(error instanceof Error)) {
+    return 'Sin detalles adicionales';
+  }
+
+  return error.message || 'Sin detalles adicionales';
 }
 
 async function runServiceAction(action) {
