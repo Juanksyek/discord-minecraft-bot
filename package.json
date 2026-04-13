@@ -1,0 +1,20 @@
+{
+  "name": "discord-minecraft-bot",
+  "version": "1.0.0",
+  "description": "Bot de Discord para consultar y administrar un servidor Minecraft Paper en Raspberry Pi.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "discord.js": "^14.0.0",
+    "dotenv": "^16.0.0",
+    "minecraft-server-util": "^5.0.0"
+  }
+}
