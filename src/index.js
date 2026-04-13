@@ -306,7 +306,7 @@ async function sendConnectionInfo(interaction) {
         color,
         title: 'Conectate al servidor',
         description:
-          'Abre Minecraft Java, entra a **Multijugador** y pega esta direccion para unirte.',
+          'Hola pinche mugroso, para conectarte al server abre Minecraft Java, entra a **Multijugador** y pega esta direccion. Debemos salvar Tapalpa.',
         fields: [
           { name: 'Direccion publica', value: `\`${formatPublicServerAddress()}\``, inline: false },
           { name: 'Estado actual', value: statusText, inline: true },
